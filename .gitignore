@@ -1,4 +1,5 @@
 token.env
+spanner_tracker.csv
 __pycache__/
 *.pyc
 *.pyo
