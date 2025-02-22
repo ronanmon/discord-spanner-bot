@@ -10,7 +10,7 @@ A Discord bot for managing queues and tracking spanners.
 ## Setup
 1. Clone this repository.
 2. Install dependencies: `pip install -r requirements.txt`.
-3. Add your bot token to `token.env`.
+3. Add your bot token to a file named `token.env`.
 4. Run the bot: `python bot.py`.
 
 ## License
