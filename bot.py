@@ -158,7 +158,8 @@ async def unkeen(interaction: discord.Interaction):
 @bot.tree.command(name="keeners", description="Show the current queue")
 async def keeners(interaction: discord.Interaction):
     if keen_queue:
-        queue_list = "\n".join(user for user, _ in keen_queue)
+        # Include the user's position in the queue
+        queue_list = "\n".join(f"{i+1}. {user}" for i, (user, _) in enumerate(keen_queue.items()))
         await interaction.response.send_message(f"Current queue:\n{queue_list}", ephemeral=True)
     else:
         await interaction.response.send_message("The queue is currently empty.", ephemeral=True)
