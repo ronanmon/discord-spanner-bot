@@ -29,6 +29,7 @@ spanner_tracker = []
 QUEUE_LIMIT = 5
 USER_TIMEOUT = 3600  # Auto-remove users after 1 hour
 YOUR_CHANNEL_ID = None  # Dynamically determined at runtime
+ready_check_active = False  # Flag to track if a ready check is active
 
 # Function to save spanner tracker data asynchronously
 def save_spanner_tracker():
@@ -55,27 +56,31 @@ async def check_queue_timeouts():
     while True:
         await asyncio.sleep(60)
         now = time.time()
-        expired_users = [user for user, join_time in keen_queue.items() if now - join_time > USER_TIMEOUT]
-        
+        expired_users = [user for user, join_time in keen_queue.items() if now - join_time > USER_TIMEOUT and not ready_check_active]
+
         for user in expired_users:
             del keen_queue[user]
             channel = bot.get_channel(YOUR_CHANNEL_ID)
             if channel:
-                await channel.send(f"{user} removed from the queue due to timeout.")
+                await channel.send(f"{user} removed from the queue due to timeout. You have 10 minutes to rejoin at your original position!")
+                await asyncio.sleep(600)  # 10-minute window
+                if user not in keen_queue and len(keen_queue) < QUEUE_LIMIT:
+                    keen_queue[user] = time.time()
+                    await channel.send(f"{user} has rejoined the queue at their original position!")
 
 @bot.event
 async def on_ready():
     global YOUR_CHANNEL_ID
     print(f'Logged in as {bot.user}')
     load_spanner_tracker()
-    
+
     if not YOUR_CHANNEL_ID:
         for guild in bot.guilds:
             for channel in guild.text_channels:
                 if "bot" in channel.name.lower():
                     YOUR_CHANNEL_ID = channel.id
                     break
-    
+
     try:
         for guild in bot.guilds:
             bot.tree.copy_global_to(guild=guild)
@@ -83,7 +88,7 @@ async def on_ready():
         print(f"Synced commands for {len(bot.guilds)} guilds")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
-    
+
     bot.loop.create_task(check_queue_timeouts())
 
 @bot.event
@@ -95,12 +100,14 @@ async def on_resumed():
     print("Bot reconnected successfully!")
 
 async def ready_check(interaction: discord.Interaction):
+    global ready_check_active
+    ready_check_active = True
     tag_list = " ".join(keen_queue.keys())
     message = await interaction.channel.send(f"{tag_list} ALL ABOARD THE KEEN TRAIN! React with ✅ if you're ready in the next 10 minutes or face spannering! :wrench:")
     await message.add_reaction("✅")
-    
+
     reacted_users = set()
-    
+
     def check(reaction, user):
         return reaction.emoji == "✅" and user.mention in keen_queue and reaction.message.id == message.id
 
@@ -117,7 +124,12 @@ async def ready_check(interaction: discord.Interaction):
             spanner_tracker.append((user_id, user_mention))
             save_spanner_tracker()
             await interaction.channel.send(f"{user_mention} spannered by not readying up in time! :wrench:")
-        keen_queue.clear()
+        # Re-add users who reacted to the queue
+        for user in reacted_users:
+            keen_queue[user] = time.time()
+        await interaction.channel.send("Users who readied up have been re-added to the queue.")
+    finally:
+        ready_check_active = False
 
 @bot.tree.command(name="keen", description="Join the queue")
 async def keen(interaction: discord.Interaction):
@@ -125,6 +137,8 @@ async def keen(interaction: discord.Interaction):
     if user in keen_queue:
         await interaction.response.send_message(f"{user}, you're already in the queue!", ephemeral=True)
     else:
+        if user in potential_queue:
+            potential_queue.remove(user)
         keen_queue[user] = time.time()
         position = len(keen_queue)
         await interaction.response.send_message(f"{user} has joined the queue at position {position}/{QUEUE_LIMIT}.", ephemeral=False)
@@ -137,14 +151,14 @@ async def keen(interaction: discord.Interaction):
 async def unkeen(interaction: discord.Interaction):
     user = interaction.user.mention
     user_id = interaction.user.id
-    
+
     if user_id in unkeen_cooldown:
         remaining = unkeen_cooldown[user_id] - time.time()
         if remaining > 0:
             minutes, seconds = divmod(remaining, 60)
             await interaction.response.send_message(f"You're on cooldown! Try again in {int(minutes)}m {int(seconds)}s.", ephemeral=True)
             return
-    
+
     if user in keen_queue:
         del keen_queue[user]
         await interaction.response.send_message(f"{user} has been removed from the queue.", ephemeral=True)
@@ -157,10 +171,10 @@ async def unkeen(interaction: discord.Interaction):
 
 @bot.tree.command(name="keeners", description="Show the current queue")
 async def keeners(interaction: discord.Interaction):
-    if keen_queue:
-        # Include the user's position in the queue
+    if keen_queue or potential_queue:
         queue_list = "\n".join(f"{i+1}. {user}" for i, (user, _) in enumerate(keen_queue.items()))
-        await interaction.response.send_message(f"Current queue:\n{queue_list}", ephemeral=True)
+        potential_list = "\n".join(f"Potential: {user}" for user in potential_queue)
+        await interaction.response.send_message(f"Current queue:\n{queue_list}\n\nPotential keens:\n{potential_list}", ephemeral=True)
     else:
         await interaction.response.send_message("The queue is currently empty.", ephemeral=True)
 
@@ -206,12 +220,15 @@ Here's how it works:
 @bot.tree.command(name="p", description="Indicate you're potentially keen")
 async def potentially_keen(interaction: discord.Interaction):
     user = interaction.user.mention
-    if user in potential_queue:
-        potential_queue.remove(user)
-        await interaction.response.send_message(f"{user}, you're no longer potentially keen.", ephemeral=True)
+    if user in keen_queue:
+        await interaction.response.send_message(f"{user}, you're already in the queue! You can't mark yourself as potentially keen.", ephemeral=True)
     else:
-        potential_queue.add(user)
-        await interaction.response.send_message(f"{user}, you're now potentially keen! You'll be tagged if the queue is more than half full.", ephemeral=False)
+        if user in potential_queue:
+            potential_queue.remove(user)
+            await interaction.response.send_message(f"{user}, you're no longer potentially keen.", ephemeral=True)
+        else:
+            potential_queue.add(user)
+            await interaction.response.send_message(f"{user}, you're now potentially keen! You'll be tagged if the queue is more than half full.", ephemeral=False)
 
 async def notify_potentials(interaction: discord.Interaction):
     if potential_queue:
