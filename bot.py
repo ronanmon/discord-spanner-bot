@@ -151,9 +151,7 @@ async def ready_check(interaction: discord.Interaction):
     message = await interaction.channel.send(f"{tag_list} ALL ABOARD THE KEEN TRAIN! React with ✅ if you're ready in the next 10 minutes or face spannering! :wrench:")
     await message.add_reaction("✅")
 
-
     reacted_users = set()
-
 
     def check(reaction, user):
         return reaction.emoji == "✅" and user.mention in keen_queue and reaction.message.id == message.id
@@ -177,12 +175,6 @@ async def ready_check(interaction: discord.Interaction):
         await interaction.channel.send("Users who readied up have been re-added to the queue.")
     finally:
         ready_check_active = False
-        # Re-add users who reacted to the queue
-        for user in reacted_users:
-            keen_queue[user] = time.time()
-        await interaction.channel.send("Users who readied up have been re-added to the queue.")
-    finally:
-        ready_check_active = False
 
 @bot.tree.command(name="keen", description="Join the queue")
 async def keen(interaction: discord.Interaction):
@@ -190,8 +182,6 @@ async def keen(interaction: discord.Interaction):
     if user in keen_queue:
         await interaction.response.send_message(f"{user}, you're already in the queue!", ephemeral=True)
     else:
-        if user in potential_queue:
-            potential_queue.remove(user)
         if user in potential_queue:
             potential_queue.remove(user)
         keen_queue[user] = time.time()
@@ -210,14 +200,12 @@ async def unkeen(interaction: discord.Interaction):
     user = interaction.user.mention
     user_id = interaction.user.id
 
-
     if user_id in unkeen_cooldown:
         remaining = unkeen_cooldown[user_id] - time.time()
         if remaining > 0:
             minutes, seconds = divmod(remaining, 60)
             await interaction.response.send_message(f"You're on cooldown! Try again in {int(minutes)}m {int(seconds)}s.", ephemeral=True)
             return
-
 
     if user in keen_queue:
         del keen_queue[user]
@@ -237,10 +225,7 @@ async def unkeen(interaction: discord.Interaction):
 @bot.tree.command(name="keeners", description="Show the current queue")
 async def keeners(interaction: discord.Interaction):
     if keen_queue or potential_queue:
-    if keen_queue or potential_queue:
         queue_list = "\n".join(f"{i+1}. {user}" for i, (user, _) in enumerate(keen_queue.items()))
-        potential_list = "\n".join(f"Potential: {user}" for user in potential_queue)
-        await interaction.response.send_message(f"Current queue:\n{queue_list}\n\nPotential keens:\n{potential_list}", ephemeral=True)
         potential_list = "\n".join(f"Potential: {user}" for user in potential_queue)
         await interaction.response.send_message(f"Current queue:\n{queue_list}\n\nPotential keens:\n{potential_list}", ephemeral=True)
     else:
@@ -288,15 +273,6 @@ Here's how it works:
 @bot.tree.command(name="p", description="Indicate you're potentially keen")
 async def potentially_keen(interaction: discord.Interaction):
     user = interaction.user.mention
-    if user in keen_queue:
-        await interaction.response.send_message(f"{user}, you're already in the queue! You can't mark yourself as potentially keen.", ephemeral=True)
-    else:
-        if user in potential_queue:
-            potential_queue.remove(user)
-            await interaction.response.send_message(f"{user}, you're no longer potentially keen.", ephemeral=True)
-        else:
-            potential_queue.add(user)
-            await interaction.response.send_message(f"{user}, you're now potentially keen! You'll be tagged if the queue is more than half full.", ephemeral=False)
     if user in keen_queue:
         await interaction.response.send_message(f"{user}, you're already in the queue! You can't mark yourself as potentially keen.", ephemeral=True)
     else:
