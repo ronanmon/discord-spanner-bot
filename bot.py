@@ -178,6 +178,13 @@ async def ready_check(interaction: discord.Interaction):
 
 @bot.tree.command(name="keen", description="Join the queue")
 async def keen(interaction: discord.Interaction):
+    await make_keen(interaction)
+
+@bot.tree.command(name="k", description="Join the queue")
+async def keen_short(interaction: discord.Interaction):
+    await make_keen(interaction)
+
+async def make_keen(interaction: discord.Interaction):
     user = interaction.user.mention
     if user in keen_queue:
         await interaction.response.send_message(f"{user}, you're already in the queue!", ephemeral=True)
