@@ -1,5 +1,6 @@
 import discord
 import time
+import asyncio
 from queue_manager import QueueManager
 
 async def make_keen(interaction: discord.Interaction, queue_manager: QueueManager):
