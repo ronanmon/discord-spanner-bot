@@ -1,6 +1,7 @@
 import discord
 import time
 import asyncio
+import logging
 from queue_manager import QueueManager
 
 async def make_keen(interaction: discord.Interaction, queue_manager: QueueManager):
@@ -12,10 +13,10 @@ async def make_keen(interaction: discord.Interaction, queue_manager: QueueManage
             queue_manager.potential_queue.remove(user)
         queue_manager.keen_queue[user] = time.time()
         position = len(queue_manager.keen_queue)
-        await interaction.response.send_message(f"{user} has joined the queue at position {position}/{queue_manager.QUEUE_LIMIT}.", ephemeral=False)
+        await interaction.followup.send(f"{user} has joined the queue at position {position}/{queue_manager.QUEUE_LIMIT}.", ephemeral=False)
         if len(queue_manager.keen_queue) >= queue_manager.QUEUE_LIMIT:
             if queue_manager.YOUR_CHANNEL_ID is None:
-                print("YOUR_CHANNEL_ID not set. Cannot start ready check.")
+                logging.error("YOUR_CHANNEL_ID not set. Cannot start ready check.")
                 return
             await ready_check(interaction, queue_manager)
         elif len(queue_manager.keen_queue) > queue_manager.QUEUE_LIMIT // 2:  # More than half full

@@ -7,12 +7,19 @@ from queue_manager import QueueManager
 import bot_commands
 import time
 from collections import Counter
+from discord import app_commands  # Import app_commands
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Load environment variables from .env file
 load_dotenv("token.env")
 TOKEN = os.getenv("TOKEN")
+PRIVATE_CHANNEL_ID = int(os.getenv("PRIVATE_CHANNEL_ID"))  # Load private channel ID from .env
+
 if not TOKEN:
-    print("Error: TOKEN environment variable is not set.")
+    logging.error("Error: TOKEN environment variable is not set.")
     exit(1)
 
 # Enable necessary bot intents
@@ -27,7 +34,7 @@ queue_manager = QueueManager()
 
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user}')
+    logging.info(f'Logged in as {bot.user}')
     queue_manager.load_spanner_tracker()
     
     # Dynamically set YOUR_CHANNEL_ID
@@ -35,19 +42,77 @@ async def on_ready():
     
     # Sync commands
     try:
-        for guild in bot.guilds:
-            bot.tree.copy_global_to(guild=guild)
-            await bot.tree.sync(guild=guild)
-        print(f"Synced commands for {len(bot.guilds)} guilds")
+        await bot.tree.sync()
+        logging.info("Commands synced globally.")
     except Exception as e:
-        print(f"Failed to sync commands: {e}")
+        logging.error(f"Failed to sync commands: {e}")
     
     # Start the timeout checker
     bot.loop.create_task(queue_manager.check_queue_timeouts(bot))
 
-@bot.tree.command(name="keen", description="Join the queue")
-async def keen(interaction: discord.Interaction):
-    await bot_commands.make_keen(interaction, queue_manager)
+@bot.tree.command(name="keen", description="Join the queue, optionally with a delay in minutes (up to 6 hours)")
+@app_commands.describe(minutes="Optional: Delay in minutes before asking if you're still keen (1-360).")
+async def keen(interaction: discord.Interaction, minutes: app_commands.Range[int, 1, 360] = None):
+    user = interaction.user.mention
+    user_id = interaction.user.id
+
+    # Check if the user is already in the queue
+    if user in queue_manager.keen_queue:
+        await interaction.response.send_message(f"{user}, you're already in the queue!", ephemeral=True)
+        return
+
+    # Handle conditional keen (with minutes)
+    if minutes is not None:
+        # Add the user to the conditional queue
+        queue_manager.conditional_queue[user] = time.time() + (minutes * 60)
+        logging.info(f"Added {user} to conditional queue. Will check back in {minutes} minutes.")
+        await interaction.response.send_message(f"{user}, you'll be asked if you're keen in {minutes} minutes.", ephemeral=False)
+
+        # Schedule the conditional check
+        await asyncio.sleep(minutes * 60)
+
+        # Check if the user is still in the conditional queue (they might have left manually)
+        if user in queue_manager.conditional_queue:
+            logging.info(f"Checking if {user} is still keen...")
+            # Send the message to the private channel and get the message object
+            message = await queue_manager.send_message_to_channel(bot, queue_manager.YOUR_CHANNEL_ID, f"{user}, are you still keen? React with ✅ to join the queue or ❌ to decline.")
+            
+            if message:  # Ensure the message was sent successfully
+                await message.add_reaction("✅")
+                await message.add_reaction("❌")
+
+                def check(reaction, user):
+                    return (
+                        reaction.emoji in ["✅", "❌"]  # Correct emoji
+                        and user.mention in queue_manager.conditional_queue  # Correct user
+                        and reaction.message.id == message.id  # Correct message
+                    )
+
+                try:
+                    # Wait for the user's reaction with a 5-minute timeout
+                    reaction, _ = await bot.wait_for('reaction_add', timeout=300.0, check=check)
+                    if reaction.emoji == "✅":
+                        # Add the user to the queue
+                        await bot_commands.make_keen(interaction, queue_manager)
+                        await interaction.followup.send(f"{user} is still keen and has been added to the queue!", ephemeral=False)
+                    else:
+                        # Mark the user as a spanner
+                        queue_manager.spanner_tracker.append((user_id, user))
+                        queue_manager.save_spanner_tracker()
+                        await interaction.followup.send(f"{user} declined and has been marked as a spanner! :wrench:", ephemeral=False)
+                except asyncio.TimeoutError:
+                    # Mark the user as a spanner if they don't respond within 5 minutes
+                    queue_manager.spanner_tracker.append((user_id, user))
+                    queue_manager.save_spanner_tracker()
+                    await interaction.followup.send(f"{user} spannered by not responding in time! :wrench:", ephemeral=False)
+                finally:
+                    # Remove the user from the conditional queue
+                    del queue_manager.conditional_queue[user]
+            else:
+                logging.error(f"Failed to send message to channel {queue_manager.YOUR_CHANNEL_ID}.")
+    else:
+        # Regular keen behavior (no delay)
+        await bot_commands.make_keen(interaction, queue_manager)
 
 @bot.tree.command(name="unkeen", description="Leave the queue")
 async def unkeen(interaction: discord.Interaction):
@@ -67,7 +132,7 @@ async def unkeen(interaction: discord.Interaction):
         if queue_manager.YOUR_CHANNEL_ID is not None:
             await queue_manager.send_message_to_channel(bot, queue_manager.YOUR_CHANNEL_ID, f"{user} is spannering :wrench:")
         else:
-            print("YOUR_CHANNEL_ID not set. Cannot send spanner message.")
+            logging.error("YOUR_CHANNEL_ID not set. Cannot send spanner message.")
         queue_manager.unkeen_cooldown[user_id] = time.time() + 300
         queue_manager.spanner_tracker.append((user_id, user))
         queue_manager.save_spanner_tracker()
@@ -113,7 +178,8 @@ async def spannerhelp(interaction: discord.Interaction):
 
 Here's how it works:
 - Use `/keen` to join the queue. When the queue is full, a ready check will start.
-- During the ready check, you have **10 minutes** to react with ✅. If you don't, you'll be marked as a **spanner**! 🔧
+    - Use `/keen` followed by a number to give a conditional keen.
+    - During the ready check, you have **10 minutes** to react with ✅. If you don't, you'll be marked as a **spanner**! 🔧
 - Use `/unkeen` to leave the queue, but beware: you'll also be marked as a spanner and put on a 5-minute cooldown.
 - Use `/spanners` to see who's been spannered and how many times.
 - Use `/cleartracker` to wipe the spanner slate clean (admin only).
@@ -133,5 +199,11 @@ async def potentially_keen(interaction: discord.Interaction):
         else:
             queue_manager.potential_queue.add(user)
             await interaction.response.send_message(f"{user}, you're now potentially keen! You'll be tagged if the queue is more than half full.", ephemeral=False)
+
+# Command to manually sync commands
+@bot.command()
+async def sync(ctx):
+    await bot.tree.sync()
+    await ctx.send("Commands synced globally.")
 
 bot.run(TOKEN)

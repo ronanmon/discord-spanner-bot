@@ -4,23 +4,35 @@ import os
 import time
 from collections import Counter
 import logging
-import asyncio  # Add this import
+import asyncio
+from dotenv import load_dotenv  # Import load_dotenv
 
+# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Load environment variables from .env file
+load_dotenv("token.env")
 
 class QueueManager:
     def __init__(self):
         self.keen_queue = {}  # {user_mention: join_timestamp}
         self.potential_queue = set()  # Track users who are potentially keen
+        self.conditional_queue = {}  # {user_mention: expiry_timestamp}
         self.unkeen_cooldown = {}
         self.spanner_tracker = []
         self.QUEUE_LIMIT = 5
         self.USER_TIMEOUT = 3600  # Auto-remove users after 1 hour
-        self.YOUR_CHANNEL_ID = None  # Dynamically determined at runtime
+        self.YOUR_CHANNEL_ID = int(os.getenv("PRIVATE_CHANNEL_ID"))  # Load private channel ID from .env
         self.ready_check_active = False  # Flag to track if a ready check is active
 
     async def set_channel_id(self, bot):
         """Dynamically set the channel ID for notifications."""
+        # If YOUR_CHANNEL_ID is already set (from .env), skip dynamic setting
+        if self.YOUR_CHANNEL_ID:
+            logging.info(f"Using private channel ID from .env: {self.YOUR_CHANNEL_ID}")
+            return
+        
+        # Fallback to other channels if PRIVATE_CHANNEL_ID is not set in .env
         for guild in bot.guilds:
             for channel in guild.text_channels:
                 if "bot" in channel.name.lower():
@@ -87,15 +99,18 @@ class QueueManager:
                     self.keen_queue[user] = time.time()
                     await self.send_message_to_channel(bot, self.YOUR_CHANNEL_ID, f"{user} has rejoined the queue at their original position!")
 
-    async def send_message_to_channel(self, bot, channel_id, message):
-        """Helper function to send messages to a channel."""
+    async def send_message_to_channel(self, bot, channel_id, message_content):
+        """Helper function to send messages to a channel and return the message object."""
         channel = bot.get_channel(channel_id)
         if channel:
             try:
-                await channel.send(message)
+                message = await channel.send(message_content)
+                logging.info(f"Message sent to channel {channel_id}: {message_content}")
+                return message  # Return the message object
             except discord.Forbidden:
                 logging.error(f"ERROR: Bot lacks permissions to send messages in channel {channel_id}!")
             except discord.HTTPException as e:
                 logging.error(f"ERROR: Failed to send message in channel {channel_id}: {e}")
         else:
             logging.error(f"Channel {channel_id} not found!")
+        return None  # Return None if the message couldn't be sent
